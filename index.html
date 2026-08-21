@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registo de Roleta</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0f6e56">
+<style>
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    max-width: 700px;
+    margin: 40px auto;
+    padding: 0 16px;
+    background: #f5f5f2;
+    color: #222;
+  }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  p.sub { color: #666; margin-top: 0; margin-bottom: 24px; }
+  .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  input[type="number"] {
+    width: 140px; padding: 8px 10px; font-size: 14px;
+    border: 1px solid #ccc; border-radius: 6px;
+  }
+  button {
+    padding: 8px 16px; font-size: 14px; border-radius: 6px;
+    border: 1px solid #999; background: #fff; cursor: pointer;
+  }
+  button:hover { background: #eee; }
+  #clear { margin-left: auto; }
+  #err { color: #c0392b; font-size: 13px; display: none; margin: 4px 0 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 16px; background: #fff; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e0e0e0; }
+  th { color: #666; font-weight: 600; }
+  .badge { padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+  .red { background: #fcebeb; color: #791f1f; }
+  .black { background: #e8e8e5; color: #333; }
+  .green { background: #eaf3de; color: #27500a; }
+  #empty { color: #999; font-size: 14px; margin-top: 12px; }
+  .stats { display: flex; gap: 16px; margin-top: 20px; font-size: 13px; color: #555; }
+  .stats span b { color: #222; }
+  #voiceBtn { display: flex; align-items: center; gap: 6px; }
+  #voiceBtn.listening { background: #fcebeb; border-color: #c0392b; color: #791f1f; }
+  #voiceStatus { font-size: 13px; color: #666; margin: 6px 0 0; min-height: 18px; }
+  .confirmBox {
+    display: none; align-items: center; gap: 10px; margin-top: 10px;
+    background: #fff8e6; border: 1px solid #e0c46a; border-radius: 6px; padding: 10px 12px;
+  }
+  .confirmBox.show { display: flex; }
+  .confirmBox b { font-size: 16px; }
+  .confirmBox button { padding: 6px 12px; font-size: 13px; }
+  .alertBox {
+    display: none; margin-top: 14px; background: #fcebeb; border: 1px solid #c0392b;
+    border-radius: 6px; padding: 10px 12px; font-size: 14px; color: #791f1f;
+  }
+  .alertBox.show { display: block; }
+  .alertBox b { display: block; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+
+<h1>Registo de números da roleta</h1>
+<p class="sub">Insere um número (0–36) para registar a cor, dúzia e coluna onde parou.</p>
+
+<div class="controls">
+  <input type="number" id="num" min="0" max="36" placeholder="Nº (0-36)" />
+  <button id="add">Registar</button>
+  <button id="voiceBtn">🎤 Ouvir (EN)</button>
+  <button id="clear">Limpar histórico</button>
+  <button id="testVibrate" style="font-size:12px;">Testar vibração</button>
+</div>
+<p id="err">Insere um número inteiro entre 0 e 36.</p>
+<p id="voiceStatus"></p>
+<div class="confirmBox" id="confirmBox">
+  <span>Ouvi: <b id="confirmNum"></b> — confirmas?</span>
+  <button id="confirmYes">Sim, registar</button>
+  <button id="confirmNo">Ignorar</button>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Número</th>
+      <th>Cor</th>
+      <th>Dúzia</th>
+      <th>Coluna</th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<p id="empty">Ainda sem registos.</p>
+
+<div class="stats" id="stats"></div>
+<div class="alertBox" id="alertBox"></div>
+
+<p style="font-size:13px; color:#888; margin-top:24px;">
+  Nota: cada jogada é independente — uma sequência longa sem 1ª dúzia/coluna não torna a próxima mais provável. Isto é apenas um registo informativo, não uma previsão.
+</p>
+
+<script>
+const redNumbers = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
+
+function duzia(n){
+  if(n===0) return '-';
+  if(n<=12) return '1ª (1-12)';
+  if(n<=24) return '2ª (13-24)';
+  return '3ª (25-36)';
+}
+function coluna(n){
+  if(n===0) return '-';
+  const r = n % 3;
+  if(r===1) return '1ª coluna';
+  if(r===2) return '2ª coluna';
+  return '3ª coluna';
+}
+function cor(n){
+  if(n===0) return {label:'Verde', cls:'green'};
+  return redNumbers.has(n) ? {label:'Vermelho', cls:'red'} : {label:'Preto', cls:'black'};
+}
+
+let history = [];
+
+function render(){
+  const rows = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  const stats = document.getElementById('stats');
+  rows.innerHTML = '';
+
+  if(history.length===0){
+    empty.style.display = 'block';
+    stats.innerHTML = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  history.forEach((n, i) => {
+    const c = cor(n);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${history.length - i}</td>
+      <td><b>${n}</b></td>
+      <td><span class="badge ${c.cls}">${c.label}</span></td>
+      <td>${duzia(n)}</td>
+      <td>${coluna(n)}</td>
+    `;
+    rows.appendChild(tr);
+  });
+
+  const reds = history.filter(n => redNumbers.has(n)).length;
+  const blacks = history.filter(n => n !== 0 && !redNumbers.has(n)).length;
+  const zeros = history.filter(n => n === 0).length;
+  stats.innerHTML = `
+    <span>Total: <b>${history.length}</b></span>
+    <span>Vermelhos: <b>${reds}</b></span>
+    <span>Pretos: <b>${blacks}</b></span>
+    <span>Zeros: <b>${zeros}</b></span>
+  `;
+
+  checkStreaks();
+}
+
+const STREAK_LIMIT = 7;
+let lastAlertKey = '';
+
+function playBeep(){
+  try{
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.5);
+    // segundo beep
+    setTimeout(() => {
+      const ctx2 = new (window.AudioContext || window.webkitAudioContext)();
+      const osc2 = ctx2.createOscillator();
+      const gain2 = ctx2.createGain();
+      osc2.connect(gain2);
+      gain2.connect(ctx2.destination);
+      osc2.type = 'sine';
+      osc2.frequency.value = 880;
+      gain2.gain.setValueAtTime(0.2, ctx2.currentTime);
+      gain2.gain.exponentialRampToValueAtTime(0.001, ctx2.currentTime + 0.5);
+      osc2.start();
+      osc2.stop(ctx2.currentTime + 0.5);
+    }, 250);
+  }catch(e){}
+}
+
+function vibrate(){
+  if(navigator.vibrate){
+    navigator.vibrate([200, 100, 200]);
+  }
+}
+
+function checkStreaks(){
+  const alertBox = document.getElementById('alertBox');
+  // history[0] é o mais recente
+
+  function streakFor(matchFn){
+    let streak = 0;
+    for(const n of history){
+      if(matchFn(n)) break;
+      streak++;
+    }
+    return streak;
+  }
+
+  const duzias = [
+    { label: '1ª dúzia (1-12)', fn: n => n >= 1 && n <= 12 },
+    { label: '2ª dúzia (13-24)', fn: n => n >= 13 && n <= 24 },
+    { label: '3ª dúzia (25-36)', fn: n => n >= 25 && n <= 36 },
+  ];
+  const colunas = [
+    { label: '1ª coluna', fn: n => n !== 0 && n % 3 === 1 },
+    { label: '2ª coluna', fn: n => n !== 0 && n % 3 === 2 },
+    { label: '3ª coluna', fn: n => n !== 0 && n % 3 === 0 },
+  ];
+
+  const msgs = [];
+  [...duzias, ...colunas].forEach(g => {
+    const streak = streakFor(g.fn);
+    if(streak >= STREAK_LIMIT){
+      msgs.push(`${g.label} não sai há <b>${streak}</b> jogadas.`);
+    }
+  });
+
+  if(msgs.length > 0){
+    alertBox.innerHTML = '<b>⚠ Sequência longa detetada</b>' + msgs.join(' ');
+    alertBox.classList.add('show');
+    const key = msgs.join('|');
+    if(key !== lastAlertKey){
+      playBeep();
+      vibrate();
+      lastAlertKey = key;
+    }
+  } else {
+    alertBox.classList.remove('show');
+    lastAlertKey = '';
+  }
+}
+
+function addNumber(){
+  const input = document.getElementById('num');
+  const err = document.getElementById('err');
+  const val = input.value.trim();
+  const n = Number(val);
+  if(val === '' || !Number.isInteger(n) || n < 0 || n > 36){
+    err.style.display = 'block';
+    return;
+  }
+  err.style.display = 'none';
+  history.unshift(n);
+  input.value = '';
+  input.focus();
+  render();
+}
+
+document.getElementById('add').addEventListener('click', addNumber);
+document.getElementById('num').addEventListener('keydown', (e) => {
+  if(e.key === 'Enter') addNumber();
+});
+document.getElementById('num').addEventListener('input', () => {
+  document.getElementById('err').style.display = 'none';
+});
+document.getElementById('clear').addEventListener('click', () => {
+  history = [];
+  render();
+});
+
+document.getElementById('testVibrate').addEventListener('click', () => {
+  if(navigator.vibrate){
+    const ok = navigator.vibrate([200, 100, 200]);
+    voiceStatus.textContent = ok ? 'Vibração pedida ao telemóvel.' : 'O telemóvel recusou o pedido de vibração.';
+  } else {
+    voiceStatus.textContent = 'Este navegador não suporta a API de vibração.';
+  }
+});
+
+// --- Reconhecimento de voz (inglês) ---
+const numberWords = {
+  zero:0, "double zero":0, oh:0,
+  one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9,
+  ten:10, eleven:11, twelve:12, thirteen:13, fourteen:14, fifteen:15,
+  sixteen:16, seventeen:17, eighteen:18, nineteen:19, twenty:20,
+  thirty:30
+};
+const tens = { twenty:20, thirty:30 };
+const units = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9 };
+
+function wordsToNumber(text){
+  const t = text.toLowerCase().trim();
+  if(t.includes('double zero')) return 0;
+  // dígitos diretos, ex: "23"
+  const digitMatch = t.match(/\b\d{1,2}\b/);
+  if(digitMatch) return parseInt(digitMatch[0], 10);
+  // número por extenso direto (zero a trinta)
+  for(const key in numberWords){
+    if(t === key || t.includes(' ' + key) || t.startsWith(key)){
+      // tentar compor "twenty three" / "thirty six"
+      const tensMatch = t.match(/(twenty|thirty)[\s-]?(\w+)?/);
+      if(tensMatch){
+        const base = tens[tensMatch[1]];
+        const unit = units[tensMatch[2]] || 0;
+        return base + unit;
+      }
+      return numberWords[key];
+    }
+  }
+  return null;
+}
+
+const voiceBtn = document.getElementById('voiceBtn');
+const voiceStatus = document.getElementById('voiceStatus');
+const confirmBox = document.getElementById('confirmBox');
+const confirmNum = document.getElementById('confirmNum');
+const confirmYes = document.getElementById('confirmYes');
+const confirmNo = document.getElementById('confirmNo');
+let pendingNumber = null;
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let listening = false;
+
+if(SpeechRecognition){
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.continuous = true;
+  recognition.interimResults = false;
+
+  recognition.onresult = (event) => {
+    const last = event.results[event.results.length - 1];
+    const transcript = last[0].transcript;
+    const n = wordsToNumber(transcript);
+    if(n !== null && n >= 0 && n <= 36){
+      pendingNumber = n;
+      confirmNum.textContent = n;
+      confirmBox.classList.add('show');
+      voiceStatus.textContent = 'Ouvido: "' + transcript.trim() + '"';
+    } else {
+      voiceStatus.textContent = 'Não percebi ("' + transcript.trim() + '"). Tenta novamente.';
+    }
+  };
+
+  recognition.onerror = (event) => {
+    voiceStatus.textContent = 'Erro no reconhecimento: ' + event.error;
+  };
+
+  recognition.onend = () => {
+    if(listening){
+      recognition.start(); // reinicia automaticamente enquanto ativo
+    }
+  };
+
+  voiceBtn.addEventListener('click', () => {
+    listening = !listening;
+    if(listening){
+      recognition.start();
+      voiceBtn.classList.add('listening');
+      voiceBtn.textContent = '⏹ Parar';
+      voiceStatus.textContent = 'A ouvir em inglês...';
+    } else {
+      recognition.stop();
+      voiceBtn.classList.remove('listening');
+      voiceBtn.textContent = '🎤 Ouvir (EN)';
+      voiceStatus.textContent = '';
+    }
+  });
+} else {
+  voiceBtn.disabled = true;
+  voiceBtn.title = 'O teu navegador não suporta reconhecimento de voz (usa o Chrome).';
+  voiceStatus.textContent = 'Reconhecimento de voz não suportado neste navegador — experimenta o Chrome.';
+}
+
+confirmYes.addEventListener('click', () => {
+  if(pendingNumber !== null){
+    history.unshift(pendingNumber);
+    render();
+  }
+  confirmBox.classList.remove('show');
+  pendingNumber = null;
+});
+confirmNo.addEventListener('click', () => {
+  confirmBox.classList.remove('show');
+  pendingNumber = null;
+});
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+
+render();
+</script>
+
+</body>
+</html>
